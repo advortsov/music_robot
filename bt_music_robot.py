@@ -232,6 +232,84 @@ def stop_music(log_file):
     adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
 
 
+def test_playback(log_file):
+    """
+    Тестовое воспроизведение при запуске
+    Проверяет: Bluetooth, подключение к колонке, воспроизведение музыки
+    """
+    write_log(log_file, "INFO", "=" * 60)
+    write_log(log_file, "INFO", "🧪 ТЕСТОВОЕ ВОСПРОИЗВЕДЕНИЕ")
+    write_log(log_file, "INFO", "=" * 60)
+
+    try:
+        # 1. Включаем Bluetooth
+        write_log(log_file, "INFO", "1. Включение Bluetooth...")
+        enable_bluetooth(log_file)
+        time.sleep(2)
+
+        # 2. Подключаемся к колонке
+        write_log(log_file, "INFO", "2. Подключение к колонке...")
+        connect_to_speaker(log_file)
+        time.sleep(2)
+
+        # 3. Устанавливаем громкость (50% для теста, чтобы не оглушило)
+        write_log(log_file, "INFO", "3. Установка громкости 50%...")
+        set_volume(log_file, 50)
+        time.sleep(1)
+
+        # 4. Запускаем музыку
+        write_log(log_file, "INFO", "4. Тестовое воспроизведение (5 секунд)...")
+        media_path = get_random_media_file(log_file)
+
+        if not media_path:
+            write_log(log_file, "ERROR", "❌ Не найден аудиофайл для теста")
+            return False
+
+        write_log(log_file, "INFO", f"   Файл: {media_path}")
+
+        # Пробуем разные способы воспроизведения
+        success = False
+
+        # Способ 1: termux-media-player
+        result = subprocess.run(["termux-media-player", "stop"], capture_output=True)
+        time.sleep(0.5)
+        result = subprocess.run(["termux-media-player", "play", media_path], capture_output=True)
+
+        if result.returncode == 0:
+            write_log(log_file, "INFO", "   ✅ Воспроизведение через termux-media-player")
+            success = True
+        else:
+            # Способ 2: ADB
+            write_log(log_file, "WARNING", "   Пробую ADB...")
+            adb_command(f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/*"', log_file)
+            time.sleep(1)
+            adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
+            success = True
+
+        if success:
+            # Играем 5 секунд
+            for i in range(5):
+                write_log(log_file, "DEBUG", f"   Играет... {i + 1}/5 сек")
+                time.sleep(1)
+
+            # Останавливаем
+            write_log(log_file, "INFO", "5. Остановка тестового воспроизведения...")
+            subprocess.run(["termux-media-player", "stop"], capture_output=True)
+            adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
+
+            write_log(log_file, "INFO", "✅ ТЕСТ ПРОЙДЕН УСПЕШНО")
+            write_log(log_file, "INFO", "=" * 60)
+            return True
+        else:
+            write_log(log_file, "ERROR", "❌ ТЕСТ НЕ УДАЛСЯ")
+            write_log(log_file, "INFO", "=" * 60)
+            return False
+
+    except Exception as e:
+        write_log(log_file, "ERROR", f"❌ Ошибка при тесте: {e}")
+        write_log(log_file, "INFO", "=" * 60)
+        return False
+
 # ========== РАСПИСАНИЕ (остаётся без изменений) ==========
 
 def parse_time_to_seconds(time_str):
@@ -388,22 +466,40 @@ def run_full_schedule(log_file):
 # ========== ТОЧКА ВХОДА ==========
 
 def main():
+    """Главная функция"""
     log_file = init_logging()
-    print(f"\nЛог: {log_file}")
+
+    print("\n" + "=" * 60)
+    print("Bluetooth Music Randomizer v2.0")
+    print("=" * 60)
+    print(f"Лог: {log_file}")
+    print()
 
     try:
+        # Запрашиваем подтверждение на тест
+        print("Выполнить тестовое воспроизведение? (y/n): ", end="")
+        response = input().strip().lower()
+
+        if response == 'y' or response == 'yes' or response == '':
+            if not test_playback(log_file):
+                print("\n❌ Тест не удался. Хотите продолжить всё равно? (y/n): ", end="")
+                if input().strip().lower() != 'y':
+                    print("Выход.")
+                    return
+
+        # Запускаем основную сессию
         run_full_schedule(log_file)
-        print(f"\n✅ Готово!")
+        print(f"\n✅ Готово! Лог: {log_file}")
+
     except KeyboardInterrupt:
-        write_log(log_file, "INFO", "Прервано")
+        write_log(log_file, "INFO", "\nПрервано пользователем")
         if CONFIG['DISABLE_BT_AFTER_SESSION']:
             disable_bluetooth(log_file)
-        print("\n⚠️ Прервано")
-        sys.exit(0)
+        print("\n\n⚠️ Прервано пользователем")
+
     except Exception as e:
-        write_log(log_file, "ERROR", f"Ошибка: {e}")
+        write_log(log_file, "ERROR", f"Критическая ошибка: {e}")
         print(f"\n❌ Ошибка: {e}")
-        sys.exit(1)
 
 
 if __name__ == "__main__":
