@@ -209,20 +209,9 @@ def play_music(log_file):
     if not media_path:
         return False
 
-    write_log(log_file, "INFO", f"Запуск: {media_path}")
-
-    # Через termux-media-player (самый надёжный способ)
-    subprocess.run(["termux-media-player", "stop"], capture_output=True)
-    time.sleep(0.5)
-    result = subprocess.run(["termux-media-player", "play", media_path], capture_output=True)
-
-    if result.returncode == 0:
-        write_log(log_file, "INFO", "Музыка запущена (termux-media-player)")
-        return True
-
-    # Если не сработало — пробуем через ADB
-    write_log(log_file, "WARNING", "termux-media-player не сработал, пробую ADB")
-    adb_command(f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/*"', log_file)
+    # Запускаем через VLC
+    cmd = f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/mpeg" -n "org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity"'
+    adb_command(cmd, log_file)
     time.sleep(1)
     adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
     return True
