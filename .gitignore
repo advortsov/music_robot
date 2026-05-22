@@ -216,3 +216,38 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Приватные ключи
+*.pem
+*.key
+id_rsa
+id_ed25519
+id_dsa
+*.priv
+
+# Файлы с паролями и секретами
+.env
+.env.local
+.env.*.local
+
+# Логи и данные
+logs/
+*.log
+*.db
+*.sqlite
+
+# Временные файлы
+*.tmp
+*.swp
+*~
+
+# Файлы окружения Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Файлы Android/терминала
+.storage/
+.bash_history
