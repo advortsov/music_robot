@@ -164,14 +164,26 @@ def write_config_to_log(log_file):
 
 # ========== УПРАВЛЕНИЕ BLUETOOTH И МУЗЫКОЙ ==========
 
-def adb_command(cmd, log_file=None):
+def adb_command(cmd, log_file=None, capture_output=True):
+    """Выполняет ADB-команду и возвращает результат с выводом"""
     full_cmd = f"adb shell {cmd}"
+
+    if log_file:
+        write_log(log_file, "DEBUG", f"ADB → {cmd[:100]}{'...' if len(cmd) > 100 else ''}")
+
     result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
-    if CONFIG['DEBUG_MODE'] and log_file:
-        if result.stdout:
-            write_log(log_file, "DEBUG", f"ADB stdout: {result.stdout[:200]}")
-        if result.stderr:
-            write_log(log_file, "DEBUG", f"ADB stderr: {result.stderr[:200]}")
+
+    if log_file and capture_output:
+        if result.stdout and result.stdout.strip():
+            # Логируем первые 500 символов вывода
+            stdout_preview = result.stdout[:500].replace('\n', ' ')
+            write_log(log_file, "DEBUG", f"ADB stdout: {stdout_preview}")
+        if result.stderr and result.stderr.strip():
+            stderr_preview = result.stderr[:500].replace('\n', ' ')
+            write_log(log_file, "DEBUG", f"ADB stderr: {stderr_preview}")
+        if result.returncode != 0:
+            write_log(log_file, "DEBUG", f"ADB return code: {result.returncode}")
+
     return result
 
 
@@ -204,17 +216,153 @@ def connect_to_speaker(log_file):
     time.sleep(3)
 
 
+def get_content_uri(media_path, log_file):
+    """Получает content URI для файла (более надёжный способ воспроизведения)"""
+    try:
+        # Получаем ID файла через media provider
+        cmd = f"content query --uri content://media/external/file --where \"_data='{media_path}'\""
+        result = adb_command(cmd, log_file, capture_output=True)
+
+        import re
+        # Ищем _id в выводе
+        match = re.search(r'_id=(\d+)', result.stdout)
+        if match:
+            media_id = match.group(1)
+            content_uri = f"content://media/external/file/{media_id}"
+            write_log(log_file, "INFO", f"Найден content URI: {content_uri}")
+            return content_uri
+
+        # Альтернативный метод: ищем по имени файла
+        file_name = media_path.split('/')[-1]
+        cmd = f"content query --uri content://media/external/file --where \"_display_name='{file_name}'\""
+        result = adb_command(cmd, log_file, capture_output=True)
+        match = re.search(r'_id=(\d+)', result.stdout)
+        if match:
+            media_id = match.group(1)
+            content_uri = f"content://media/external/file/{media_id}"
+            write_log(log_file, "INFO", f"Найден content URI (по имени): {content_uri}")
+            return content_uri
+
+        write_log(log_file, "WARNING", "Не удалось получить content URI")
+        return None
+
+    except Exception as e:
+        write_log(log_file, "ERROR", f"Ошибка получения content URI: {e}")
+        return None
+
 def play_music(log_file):
+    """Запускает воспроизведение с подробным логированием"""
     media_path = get_random_media_file(log_file)
+
     if not media_path:
+        write_log(log_file, "ERROR", "❌ Не удалось определить аудиофайл")
         return False
 
-    # Запускаем через VLC
-    cmd = f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/mpeg" -n "org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity"'
-    adb_command(cmd, log_file)
-    time.sleep(1)
+    write_log(log_file, "INFO", f"🎵 Файл для воспроизведения: {media_path}")
+
+    # Проверяем существование файла
+    check_cmd = f"test -f '{media_path}' && echo 'EXISTS' || echo 'NOT_FOUND'"
+    result = adb_command(check_cmd, log_file)
+    if 'NOT_FOUND' in result.stdout:
+        write_log(log_file, "ERROR", f"❌ Файл не существует: {media_path}")
+        return False
+    write_log(log_file, "INFO", "✅ Файл существует")
+
+    # Проверяем, подключена ли Bluetooth-колонка
+    bt_check = adb_command("dumpsys bluetooth | grep -A 3 'Connection State'", log_file)
+    write_log(log_file, "INFO", f"📊 Статус Bluetooth:\n{bt_check.stdout[:300]}")
+
+    # Останавливаем текущее воспроизведение
+    write_log(log_file, "INFO", "⏹ Останавливаем текущее воспроизведение...")
+    adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
+    adb_command("input keyevent KEYCODE_MEDIA_PAUSE", log_file)
+    time.sleep(0.5)
+
+    # МЕТОД 1: Через content URI (наиболее надёжный)
+    write_log(log_file, "INFO", "📌 МЕТОД 1: Воспроизведение через content URI")
+    content_uri = get_content_uri(media_path, log_file)
+
+    if content_uri:
+        cmd = f'am start -a android.intent.action.VIEW -d "{content_uri}" -t "audio/mpeg" -f 268435456'
+        result = adb_command(cmd, log_file)
+
+        if result.returncode == 0:
+            write_log(log_file, "INFO", "✅ Команда content URI выполнена")
+            time.sleep(1.5)
+            adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
+            write_log(log_file, "INFO", "✅ Музыка запущена через content URI")
+            return True
+        else:
+            write_log(log_file, "WARNING", f"❌ content URI не сработал (code: {result.returncode})")
+    else:
+        write_log(log_file, "WARNING", "⚠ Не удалось получить content URI")
+
+    # МЕТОД 2: Через file:// с MIME type audio/mpeg
+    write_log(log_file, "INFO", "📌 МЕТОД 2: Воспроизведение через file:// с audio/mpeg")
+    cmd = f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/mpeg" -f 268435456'
+    result = adb_command(cmd, log_file)
+
+    if result.returncode == 0:
+        write_log(log_file, "INFO", "✅ Команда file:// выполнена")
+        time.sleep(1.5)
+        adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
+        write_log(log_file, "INFO", "✅ Музыка запущена через file://")
+        return True
+    else:
+        write_log(log_file, "WARNING", f"❌ file:// не сработал (code: {result.returncode})")
+
+    # МЕТОД 3: Через file:// с audio/* MIME type
+    write_log(log_file, "INFO", "📌 МЕТОД 3: Воспроизведение через file:// с audio/*")
+    cmd = f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/*" -f 268435456'
+    result = adb_command(cmd, log_file)
+
+    if result.returncode == 0:
+        write_log(log_file, "INFO", "✅ Команда audio/* выполнена")
+        time.sleep(1.5)
+        adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
+        write_log(log_file, "INFO", "✅ Музыка запущена через audio/*")
+        return True
+    else:
+        write_log(log_file, "WARNING", f"❌ audio/* не сработал (code: {result.returncode})")
+
+    # МЕТОД 4: Через termux-media-player (на всякий случай)
+    write_log(log_file, "INFO", "📌 МЕТОД 4: Воспроизведение через termux-media-player")
+    subprocess.run(["termux-media-player", "stop"], capture_output=True)
+    result = subprocess.run(["termux-media-player", "play", media_path], capture_output=True)
+
+    if result.returncode == 0:
+        write_log(log_file, "INFO", "✅ termux-media-player выполнен")
+        write_log(log_file, "INFO", f"   stdout: {result.stdout}")
+        write_log(log_file, "INFO", f"   stderr: {result.stderr}")
+        return True
+    else:
+        write_log(log_file, "WARNING", f"❌ termux-media-player не сработал (code: {result.returncode})")
+        write_log(log_file, "WARNING", f"   stderr: {result.stderr}")
+
+    # МЕТОД 5: Просто посылаем MEDIA_PLAY (вдруг что-то уже открыто)
+    write_log(log_file, "INFO", "📌 МЕТОД 5: Только MEDIA_PLAY")
     adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
-    return True
+    write_log(log_file, "INFO", "✅ Отправлена команда MEDIA_PLAY")
+
+    # ВСЕ МЕТОДЫ НЕ СРАБОТАЛИ
+    write_log(log_file, "ERROR", "❌❌❌ ВСЕ МЕТОДЫ ВОСПРОИЗВЕДЕНИЯ НЕ СРАБОТАЛИ ❌❌❌")
+    write_log(log_file, "ERROR", "Возможные причины:")
+    write_log(log_file, "ERROR", "  1. Нет приложения, которое может воспроизвести этот файл")
+    write_log(log_file, "ERROR", "  2. Bluetooth-колонка не готова к воспроизведению")
+    write_log(log_file, "ERROR", "  3. Нет прав на воспроизведение")
+    return False
+
+
+def stop_music(log_file):
+    """Останавливает воспроизведение с подробным логированием"""
+    write_log(log_file, "INFO", "⏹ Остановка музыки...")
+
+    # Несколько способов остановить
+    adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
+    adb_command("input keyevent KEYCODE_MEDIA_PAUSE", log_file)
+    subprocess.run(["termux-media-player", "stop"], capture_output=True)
+
+    write_log(log_file, "INFO", "✅ Команды остановки отправлены")
 
 
 def stop_music(log_file):
