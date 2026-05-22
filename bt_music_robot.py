@@ -43,6 +43,7 @@ CONFIG = {
     'LOG_DIR': get_config('LOG_DIR', 'logs'),
     'TIME_WINDOW_START': get_config('TIME_WINDOW_START', '14:00'),
     'TIME_WINDOW_END': get_config('TIME_WINDOW_END', '19:00'),
+    'MIN_INTERVAL_BETWEEN_SEC': get_config('MIN_INTERVAL_BETWEEN_SEC', 30, int),
     'NUM_SESSIONS': get_config('NUM_SESSIONS', 5, int),
     'SESSION_DURATION_SEC': get_config('SESSION_DURATION_SEC', 60, int),
     'PAUSE_BETWEEN_MIN_MIN': get_config('PAUSE_BETWEEN_MIN_MIN', 10, int),
@@ -226,6 +227,7 @@ def play_music(log_file):
     adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
     return True
 
+
 def stop_music(log_file):
     write_log(log_file, "INFO", "Остановка музыки...")
     subprocess.run(["termux-media-player", "stop"], capture_output=True)
@@ -310,6 +312,7 @@ def test_playback(log_file):
         write_log(log_file, "INFO", "=" * 60)
         return False
 
+
 # ========== РАСПИСАНИЕ (остаётся без изменений) ==========
 
 def parse_time_to_seconds(time_str):
@@ -349,33 +352,75 @@ def wait_until_window_start(log_file):
 
 
 def generate_schedule(log_file):
+    """
+    Генерирует случайное расписание включений внутри временного окна
+    Соблюдает только:
+    1. Минимальный интервал между запусками (MIN_INTERVAL_BETWEEN_SEC)
+    2. Все включения помещаются в окно TIME_WINDOW_START - TIME_WINDOW_END
+    3. Количество включений = NUM_SESSIONS
+
+    Расписание полностью случайное, без равномерного распределения
+    """
     start_sec, end_sec = get_window_start_end_today()
     window_duration = end_sec - start_sec
     num = CONFIG['NUM_SESSIONS']
-    min_pause = CONFIG['PAUSE_BETWEEN_MIN_MIN'] * 60
-    max_pause = CONFIG['PAUSE_BETWEEN_MAX_MIN'] * 60
+    min_interval_sec = CONFIG['MIN_INTERVAL_BETWEEN_SEC']
 
-    if CONFIG['SCHEDULE_MODE'] == "random":
-        for attempt in range(1000):
-            times = sorted([random.randint(0, window_duration) for _ in range(num)])
-            valid = True
-            for i in range(1, len(times)):
-                if times[i] - times[i - 1] < min_pause:
-                    valid = False
-                    break
-            if valid and max_pause > min_pause:
-                for i in range(1, len(times)):
-                    if times[i] - times[i - 1] > max_pause:
-                        valid = False
-                        break
-            if valid:
-                return times
+    write_log(log_file, "DEBUG", f"Окно: {window_duration // 60} минут")
+    write_log(log_file, "DEBUG", f"Количество включений: {num}")
+    write_log(log_file, "DEBUG", f"Минимальный интервал: {min_interval_sec} сек")
 
-        write_log(log_file, "WARNING", "Использую равномерное расписание")
-        return [int(i * window_duration / (num + 1)) for i in range(1, num + 1)]
-    else:
-        step = window_duration / (num + 1)
-        return [int(i * step) for i in range(1, num + 1)]
+    # Максимально возможное время для размещения всех интервалов
+    max_possible_duration = (num - 1) * min_interval_sec
+
+    if max_possible_duration > window_duration:
+        write_log(log_file, "ERROR",
+                  f"Невозможно разместить {num} включений с интервалом {min_interval_sec} сек в окне {window_duration // 60} мин")
+        write_log(log_file, "ERROR", f"Требуется минимум {max_possible_duration // 60} минут")
+        return []
+
+    # Генерируем случайные времена с соблюдением минимального интервала
+    max_attempts = 10000
+
+    for attempt in range(max_attempts):
+        # Генерируем num случайных чисел в диапазоне окна
+        times = sorted([random.randint(0, window_duration) for _ in range(num)])
+
+        # Проверяем минимальный интервал между соседними
+        valid = True
+        for i in range(1, len(times)):
+            if times[i] - times[i - 1] < min_interval_sec:
+                valid = False
+                break
+
+        if valid:
+            write_log(log_file, "INFO", f"Случайное расписание сгенерировано за {attempt + 1} попыток")
+            write_log(log_file, "DEBUG",
+                      f"Интервалы между запусками: {[times[i] - times[i - 1] for i in range(1, len(times))]}")
+            return times
+
+    # Если не получилось — генерируем простым методом
+    write_log(log_file, "WARNING", "Сложная генерация не удалась, использую упрощённый метод")
+
+    times = []
+    max_start = window_duration - (num - 1) * min_interval_sec
+
+    for i in range(num):
+        if i == 0:
+            # Первое включение в случайное время от 0 до max_start
+            t = random.randint(0, max_start)
+        else:
+            # Последующие с минимальным отступом от предыдущего
+            min_t = times[-1] + min_interval_sec
+            remaining = window_duration - min_t - (num - i - 1) * min_interval_sec
+            if remaining < 0:
+                remaining = 0
+            t = random.randint(min_t, min_t + remaining)
+        times.append(t)
+
+    times.sort()
+    write_log(log_file, "INFO", f"Упрощённое случайное расписание")
+    return times
 
 
 def run_single_session(log_file, session_num, total_sessions):
