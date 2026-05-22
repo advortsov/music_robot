@@ -204,36 +204,31 @@ def connect_to_speaker(log_file):
 
 
 def play_music(log_file):
-    """Запускает воспроизведение со случайным выбором файла"""
     media_path = get_random_media_file(log_file)
-
     if not media_path:
-        write_log(log_file, "ERROR", "Не удалось определить аудиофайл для воспроизведения")
         return False
 
-    write_log(log_file, "INFO", f"Запуск музыки: {media_path}")
-    adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
+    write_log(log_file, "INFO", f"Запуск: {media_path}")
+
+    # Через termux-media-player (самый надёжный способ)
+    subprocess.run(["termux-media-player", "stop"], capture_output=True)
     time.sleep(0.5)
-
-    cmd = f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/mp3"'
-    result = adb_command(cmd, log_file)
-
-    # Если не сработало с audio/mp3, пробуем audio/*
-    if result.returncode != 0:
-        write_log(log_file, "WARNING", "Пробую с типом audio/*")
-        cmd = f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/*"'
-        result = adb_command(cmd, log_file)
+    result = subprocess.run(["termux-media-player", "play", media_path], capture_output=True)
 
     if result.returncode == 0:
-        write_log(log_file, "INFO", "Музыка запущена")
-    else:
-        write_log(log_file, "ERROR", "Не удалось запустить музыку")
+        write_log(log_file, "INFO", "Музыка запущена (termux-media-player)")
+        return True
 
-    return result.returncode == 0
-
+    # Если не сработало — пробуем через ADB
+    write_log(log_file, "WARNING", "termux-media-player не сработал, пробую ADB")
+    adb_command(f'am start -a android.intent.action.VIEW -d "file://{media_path}" -t "audio/*"', log_file)
+    time.sleep(1)
+    adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
+    return True
 
 def stop_music(log_file):
     write_log(log_file, "INFO", "Остановка музыки...")
+    subprocess.run(["termux-media-player", "stop"], capture_output=True)
     adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
 
 
