@@ -164,6 +164,68 @@ def write_config_to_log(log_file):
 
 # ========== УПРАВЛЕНИЕ BLUETOOTH И МУЗЫКОЙ ==========
 
+
+def enable_bluetooth(log_file):
+    """Включает Bluetooth через termux-api"""
+    write_log(log_file, "INFO", "Включение Bluetooth...")
+    subprocess.run(["termux-bluetooth-enable"], capture_output=True)
+    time.sleep(2)
+    write_log(log_file, "INFO", "Bluetooth включён")
+
+
+def disable_bluetooth(log_file):
+    """Выключает Bluetooth через termux-api"""
+    write_log(log_file, "INFO", "Выключение Bluetooth...")
+    subprocess.run(["termux-bluetooth-disable"], capture_output=True)
+    write_log(log_file, "INFO", "Bluetooth выключен")
+
+
+def connect_to_speaker(log_file):
+    """Подключается к Bluetooth-колонке через termux-api"""
+    write_log(log_file, "INFO", f"Подключение к колонке {CONFIG['BT_MAC']}...")
+    result = subprocess.run(["termux-bluetooth", "connect", CONFIG['BT_MAC']], capture_output=True)
+    if result.returncode != 0:
+        write_log(log_file, "WARNING", f"Ошибка подключения: {result.stderr}")
+    time.sleep(3)
+
+
+def set_volume(log_file, level):
+    """Устанавливает громкость через termux-api (работает только для звонков)"""
+    # termux-api не умеет управлять медиа-громкостью
+    # Пропускаем, громкость нужно настраивать вручную
+    write_log(log_file, "INFO", f"Громкость {level}% (настройте на колонке вручную)")
+
+
+def play_music(log_file):
+    """Запускает воспроизведение через termux-media-player"""
+    media_path = get_random_media_file(log_file)
+    if not media_path:
+        return False
+
+    write_log(log_file, "INFO", f"Запуск: {media_path}")
+
+    # Останавливаем текущее
+    subprocess.run(["termux-media-player", "stop"], capture_output=True)
+    time.sleep(0.5)
+
+    # Запускаем через termux-media-player
+    result = subprocess.run(["termux-media-player", "play", media_path], capture_output=True)
+
+    if result.returncode == 0:
+        write_log(log_file, "INFO", "Музыка запущена")
+        return True
+    else:
+        write_log(log_file, "ERROR", f"Ошибка: {result.stderr}")
+        return False
+
+
+def stop_music(log_file):
+    """Останавливает воспроизведение через termux-media-player"""
+    write_log(log_file, "INFO", "Остановка музыки...")
+    subprocess.run(["termux-media-player", "stop"], capture_output=True)
+    write_log(log_file, "INFO", "Музыка остановлена")
+
+
 def adb_command(cmd, log_file=None, capture_output=True):
     """Выполняет ADB-команду и возвращает результат с выводом"""
     full_cmd = f"adb shell {cmd}"
@@ -185,35 +247,6 @@ def adb_command(cmd, log_file=None, capture_output=True):
             write_log(log_file, "DEBUG", f"ADB return code: {result.returncode}")
 
     return result
-
-
-def set_volume(log_file, level):
-    write_log(log_file, "INFO", f"Установка громкости {level}%...")
-    android_level = int(level * 15 / 100)
-    android_level = max(0, min(15, android_level))
-    adb_command(f"media volume --stream 3 --set {android_level}", log_file)
-    write_log(log_file, "INFO", f"Громкость установлена на {level}%")
-
-
-def enable_bluetooth(log_file):
-    write_log(log_file, "INFO", "Включение Bluetooth...")
-    adb_command("svc bluetooth enable", log_file)
-    time.sleep(2)
-
-
-def disable_bluetooth(log_file):
-    write_log(log_file, "INFO", "Выключение Bluetooth...")
-    adb_command("svc bluetooth disable", log_file)
-
-
-def connect_to_speaker(log_file):
-    write_log(log_file, "INFO", f"Подключение к колонке {CONFIG['BT_MAC']}...")
-    cmd = f'am start -a android.bluetooth.device.action.ACL_CONNECTED --es android.bluetooth.device.extra.DEVICE "{CONFIG["BT_MAC"]}"'
-    result = adb_command(cmd, log_file)
-    if result.returncode != 0:
-        write_log(log_file, "WARNING", "Пробую альтернативный способ")
-        adb_command("input keyevent KEYCODE_MEDIA_PLAY", log_file)
-    time.sleep(3)
 
 
 def get_content_uri(media_path, log_file):
@@ -249,6 +282,7 @@ def get_content_uri(media_path, log_file):
     except Exception as e:
         write_log(log_file, "ERROR", f"Ошибка получения content URI: {e}")
         return None
+
 
 def play_music(log_file):
     """Запускает воспроизведение с подробным логированием"""
@@ -351,24 +385,6 @@ def play_music(log_file):
     write_log(log_file, "ERROR", "  2. Bluetooth-колонка не готова к воспроизведению")
     write_log(log_file, "ERROR", "  3. Нет прав на воспроизведение")
     return False
-
-
-def stop_music(log_file):
-    """Останавливает воспроизведение с подробным логированием"""
-    write_log(log_file, "INFO", "⏹ Остановка музыки...")
-
-    # Несколько способов остановить
-    adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
-    adb_command("input keyevent KEYCODE_MEDIA_PAUSE", log_file)
-    subprocess.run(["termux-media-player", "stop"], capture_output=True)
-
-    write_log(log_file, "INFO", "✅ Команды остановки отправлены")
-
-
-def stop_music(log_file):
-    write_log(log_file, "INFO", "Остановка музыки...")
-    subprocess.run(["termux-media-player", "stop"], capture_output=True)
-    adb_command("input keyevent KEYCODE_MEDIA_STOP", log_file)
 
 
 def test_playback(log_file):
